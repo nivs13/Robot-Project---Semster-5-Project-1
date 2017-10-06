@@ -1,49 +1,90 @@
-/********************************************************************************************************* 
+/***********************************************************************************
 
 Niv Segal
-April 6, 2017
-DC_motor
-
-This code runs the operations of a DC motor
-
-*********************************************************************************************************/
+Stepper Motor Code
+April 5, 2017
 
 
+This code is designed to operate the Stepper motor for the HCS12 microcontroller
+board.
+
+- The speed of the motor can be slowed down by increasing the integer value of 
+  stepper_speeed
+- The step type and direction of the motor can be changed by changing the step_type
+  variable between -2,-1,1,2 with 1 being half step and 2 being full step, while 
+  negtiave being clock-wise and positave means counter clock-wise
+
+
+***********************************************************************************/
 
 #include <hidef.h>      /* common defines and macros */
 #include "derivative.h"      /* derivative-specific definitions */
 #include "macros.h"
 
 
-void DC_motor_init(void);
+//prototypes
+
+void stepper_init(void);
 
 
 
-#define EIGHT_BIT_MODE 0x00
-#define PWM_RESET 0x00
-#define PWM_ECLK 0x00
-#define PRESCALE_0 0x00
-#define SA_DIVIDE_2 0x01
-#define PERIOD_22KHZ_LEFT_ALINGED 182U
-#define PWM_DTY_10 18U
-#define PWM_DTY_60 108U
-#define PWM_DTY_75 135U
-#define PERIOD_22KHZ_CENTER_ALINGED 182U
-#define SB_DIVIDE_128 0x60
-#define PERIOD_300HZ_LEFT_ALINGED 208U
-#define RTI_PERIOD 0x49                                                   // Sets RTI period to 5.12mS (Look up tabel in slides)
+#define MOTOR_A                  0x80
+#define MOTOR_AC                 0xA0
+#define MOTOR_C                  0x20
+#define MOTOR_BC                 0x60
+#define MOTOR_B                  0x40
+#define MOTOR_BD                 0x50
+#define MOTOR_D                  0x10
+#define MOTOR_AD                 0x90
+
+#define REVERSE                  (-1)
+#define STEPPER_MASK             0x07
+#define PORT_T_WRITE_MASK        0xF0
+#define RTI_PERIOD               0x49                                                   // Sets RTI period to 5.12mS or 200Hz (Look up tabel in slides)
+#define LIMIT_SWITCH_MASK        0xC0
+
+unsigned char stepper_speed;
+unsigned char rti_count;
+unsigned char stepper_array[] = {MOTOR_A,MOTOR_AC,MOTOR_C,MOTOR_BC,MOTOR_B,MOTOR_BD,MOTOR_D,MOTOR_AD};        // array with the different outputs required for the stepper motor.
+unsigned char state;                                                                                          // array index
+char step_type;                                                                                               // full step or halfstep, forwards or backwards
+char limit_switch;
 
 
 
 void main(void) {
   /* put your own code here */
   
-  CLR_BITS(PEAR,PEAR_NECLK_MASK);                                                     // Turns on E-clock on PE4
-  DC_motor_init();
+  //Initialization of stepper motor
+  
+  stepper_init();
+  
+  
+  
+  /*state = 0;
+  step_type = -1; 
+  
+  
+  SET_BITS(DDRP,DDRP_DDRP3_MASK);                                                                        // enables the stepper motor
+  SET_BITS(PTP,PTP_PTP3_MASK);
+  
+  SET_BITS(DDRT, (DDRT_DDRT7_MASK|DDRT_DDRT6_MASK|DDRT_DDRT5_MASK|DDRT_DDRT4_MASK));                       // configures Port T 4,5,6,7 to be outputs
+  
+  FORCE_BITS(PTT,PORT_T_WRITE_MASK,stepper_array[state]);                                                                             // loads the first value of stepper_array into the Port T
+  
+  */
+  
+  RTICTL = RTI_PERIOD;                                                      // Set RTI period 
+  COPCTL |= COPCTL_RSBCK_MASK;                                              // Freeze RTI during BDM active
+  CRGFLG = CRGFLG_RTIF_MASK;                                                // Clear any possibly pending RTI interrupts
+  CRGINT |= CRGINT_RTIE_MASK;                                               // Enable RTI interrupt
 
-
+  
 
 	EnableInterrupts;
+	
+	
+	
 
 
   for(;;) {
@@ -53,39 +94,50 @@ void main(void) {
 }
 
 
+interrupt VectorNumber_Vrti void RTIhandler (void) {
+	
+	
+    CRGFLG = CRGFLG_RTIF_MASK;                                                // Clear any possibly pending RTI interrupts
+
+   limit_switch = (PTAD & LIMIT_SWITCH_MASK);                                 // equates the value of PAD6 and PAD7 to limit_switch
+   
+   
+   if(limit_switch != 0) {                                                     // checks if either of the limit switches has been pressed
+    step_type = (step_type * REVERSE);
+   }
+   
+    
+	 if (rti_count < stepper_speed) {                                           // counter that devides the speed of the motor.
+	  rti_count++;       
+	 }
+	 else{
+	  
+	  state += step_type;                                                       //mod 7
+	  state &= STEPPER_MASK;
+	  
+	  FORCE_BITS(PTT,PORT_T_WRITE_MASK,stepper_array[state]);
+	  
+	  rti_count = 1; 
+	 }
+	}
 
 
 
-
-
-void DC_motor_init(void) {
+void stepper_init(void) {
   
+  rti_count = 1;
+  stepper_speed = 4;
+  state = 0;
+  step_type = -1;
+  limit_switch = 0; 
   
-  //Initilize PWM ports 4 & 5
-  PWMCTL = EIGHT_BIT_MODE;                                                              // 8-bit mode 
-  PWMPRCLK = PWM_ECLK;                                                                  // Counts E-clock directly
-  PWMSCLA = SA_DIVIDE_2;                                                                // Set the SA divisor to devide the clock by 2 (Refer to table 8.4 in textbook)
-  PWMCLK |= (PWMCLK_PCLK4_MASK | PWMCLK_PCLK5_MASK);                                    // Select clock SA as the clock source for PWM port 4 & 5 
-  PWMPOL |= (PWMPOL_PPOL4_MASK | PWMPOL_PPOL5_MASK);                                    // Sets both PWM port 4 & 5 to output high at the start of a period (Positave Polarity), by setting the bits
-  PWMCAE &= LOW(PWMCAE_CAE0_MASK);                                                      // Select left - aligned mode for PWM port 4
-  PWMCAE &= LOW(PWMCAE_CAE1_MASK);                                                      // Select left - aligned mode for PWM port 5
-  PWMPER4 = PERIOD_22KHZ_LEFT_ALINGED;                                                  // Sets period value to 22KHz
-  PWMPER5 = PERIOD_22KHZ_LEFT_ALINGED;
-  PWMDTY4 = PWM_DTY_75;                                                                 // Duty cycle (75% of the PWM frequency for PWM channel 4)
-  PWMDTY5 = PWM_DTY_75;                                                                 // Duty cycle (75% of the PWM frequency for PWM channel 5)
-  PWMCNT4 = PWM_RESET;                                                                  // Reset PWM4 & PWM5 counter
-  PWMCNT5 = PWM_RESET;
+  CLR_BITS(DDRAD,(DDRAD_DDRAD6_MASK|DDRAD_DDRAD7_MASK));                                                   // configures PAD6 & PAD7 to be inputs
+  SET_BITS(ATDDIEN,(ATDDIEN_IEN6_MASK|ATDDIEN_IEN7_MASK));                                                 // Must be set for PAD registers to read digital. Read Datasheet for more
   
+  SET_BITS(DDRP,DDRP_DDRP3_MASK);                                                                          // enables the stepper motor by enabeling PP3 to an output
+  SET_BITS(PTP,PTP_PTP3_MASK);                                                                             // sets PP3 to a high
   
-  SET_BITS(DDRB, (DDRB_BIT0_MASK|DDRB_BIT1_MASK|DDRB_BIT2_MASK|DDRB_BIT3_MASK));         // configures PORTB 0,1,2,3 to outputs
+  SET_BITS(DDRT, (DDRT_DDRT7_MASK|DDRT_DDRT6_MASK|DDRT_DDRT5_MASK|DDRT_DDRT4_MASK));                       // configures Port T 4,5,6,7 to be outputs
   
-  SET_BITS(PORTB,(PORTB_BIT1_MASK|PORTB_BIT3_MASK));                                     // writes a 1 to bits 0 and 3
-  CLR_BITS(PORTB,(PORTB_BIT0_MASK|PORTB_BIT2_MASK));                                     // writes a 0 to bits 1 and 2
-  
-  
-  
-  PWME |= (PWME_PWME4_MASK|PWME_PWME5_MASK);                                            // Enable the PWM0 and PWM1 ports
-  
-  
+  FORCE_BITS(PTT,PORT_T_WRITE_MASK,stepper_array[state]);                                                                             // loads the first value of stepper_array into the Port T
 }
-  
